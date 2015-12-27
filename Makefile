@@ -25,19 +25,21 @@
 ###############################################################################
 
 #---------- Basic settings  ----------#
-PROGRAM_NAME := blob_demo
+PROGRAM_NAME := blob
 SOURCE_BASE  := src
 BUILD_BASE   := build
 BINARY_BASE  := $(BUILD_BASE)
+PROGRAM_MAIN := main
+LIB_VERSION  := 1.0
 
 #---------- Unit tests ----------#
 TEST_SUFFIX  := _test
-TEST_EXCLUDE := main
+TEST_EXCLUDE := $(PROGRAM_MAIN)
 GTEST_BASE   := gtest
 GTEST_URL    := https://googletest.googlecode.com/files/gtest-1.7.0.zip
 
 #---------- Compilation and linking ----------#
-CXX        := g++5
+CXX        ?= g++
 SRC_EXTS   := .cc .cpp .cxx .c++ .c
 CXX_LANG   := -std=c++11 -Wl,-rpath=/usr/local/lib/gcc5 -D_GLIBCXX_USE_C99
 CXX_WARN   := -pedantic -Wall -Wextra -Wcast-align -Wcast-qual \
@@ -47,10 +49,10 @@ CXX_WARN   := -pedantic -Wall -Wextra -Wcast-align -Wcast-qual \
               -Wsign-promo -Wstrict-null-sentinel -Wstrict-overflow=2 \
               -Wswitch-default -Wshadow \
               #-Wundef -Wold-style-cast -Wctor-dtor-privacy
-CXX_OPT    := -O3 -flto -march=native -g
-CXX_COMP   := -fdiagnostics-color=auto -pipe #-Wfatal-errors
+CXX_OPT    := -O3 -march=native -g -fPIC
+CXX_COMP   := #-fdiagnostics-color=auto -pipe -Wfatal-errors
 INC_DIRS   := -I$(SOURCE_BASE)
-LINK_FLAGS := -lgmp -lgmpxx
+LINK_FLAGS := -lgmp -lgmpxx -lpthread
 
 
 #---------- No need to modify below ----------#
@@ -60,6 +62,8 @@ SRC_DIRS := $(shell find $(SOURCE_BASE) -type d -print)
 BLD_DIRS := $(addprefix $(BUILD_BASE)/,$(SRC_DIRS))
 ALL_SRCS := $(foreach DIR,$(SRC_DIRS),$(foreach EXT,$(SRC_EXTS),$(wildcard $(DIR)/*$(EXT))))
 ALL_TSTS := $(foreach EXT,$(SRC_EXTS),$(filter %$(TEST_SUFFIX)$(EXT),$(ALL_SRCS)))
+MAIN_SRC := $(foreach EXT,$(SRC_EXTS),$(filter %$(PROGRAM_MAIN)$(EXT),$(ALL_SRCS)))
+MAIN_OBJ := $(addsuffix .o,$(addprefix $(BUILD_BASE)/,$(MAIN_SRC)))
 
 # Application
 APP      := $(BINARY_BASE)/$(PROGRAM_NAME)
@@ -67,12 +71,17 @@ APP_SRCS := $(filter-out $(ALL_TSTS),$(ALL_SRCS))
 APP_OBJS := $(addsuffix .o,$(addprefix $(BUILD_BASE)/,$(APP_SRCS)))
 APP_DEPS := $(APP_OBJS:.o=.d)
 
+# Library (subset of Application; excludes main)
+SLIB     := $(dir $(APP))lib$(notdir $(APP)).a
+DLIB     := $(dir $(APP))lib$(notdir $(APP)).so
+LIB_SRCS := $(filter-out $(MAIN_SRC),$(APP_SRCS))
+LIB_OBJS := $(filter-out $(MAIN_OBJ),$(APP_OBJS))
+
 # Test infrastructure
 TST      := $(BINARY_BASE)/$(PROGRAM_NAME)$(TEST_SUFFIX)
 TST_UOBJ := $(addsuffix .o,$(addprefix $(BUILD_BASE)/,$(ALL_TSTS)))
 TST_UDEP := $(TST_UOBJ:.o=.d)
-TST_AEXC := $(foreach EXT,$(SRC_EXTS),$(filter %$(TEST_EXCLUDE)$(EXT).o,$(APP_OBJS)))
-TST_AOBJ := $(filter-out $(TST_AEXC),$(APP_OBJS))
+TST_AOBJ := $(filter-out $(MAIN_OBJ),$(APP_OBJS))
 
 # Gtest framework
 GTEST_PKG      := $(GTEST_BASE)/README
@@ -82,14 +91,14 @@ GTEST_ALL_OBJ  := $(BUILD_BASE)/$(GTEST_BASE)/gtest-all.o
 GTEST_LIB      := $(BUILD_BASE)/$(GTEST_BASE)/gtest_main.a
 
 .PHONY: all
-all: $(APP) $(TST)
+all: $(APP) static_lib dynamic_lib $(TST)
 
 .PHONY: clean
 clean:
 ifeq ($(SOURCE_BASE),$(BUILD_BASE))
-	@rm -f $(APP_OBJS) $(APP_DEPS) $(APP) $(TST_UOBJ) $(TST_UDEP) $(TST)
+	@rm -f $(APP_OBJS) $(APP_DEPS) $(APP) $(SLIB) $(DLIB) $(TST_UOBJ) $(TST_UDEP) $(TST)
 else
-	@rm -rf $(APP) $(TST) $(BUILD_BASE)
+	@rm -rf $(APP) $(SLIB) $(DLIB) $(TST) $(BUILD_BASE)
 endif
 
 # Application
@@ -105,6 +114,22 @@ $(APP_OBJS): $(BUILD_BASE)/%.o: % | $(BLD_DIRS)
 $(BLD_DIRS):
 	@mkdir -p $@
 
+# Libraries
+
+.PHONY: static_lib
+static_lib: $(SLIB)
+
+$(SLIB): $(LIB_OBJS)
+	@echo [Static Library] $@
+	@ar -cr -o $@ $(LIB_OBJS)
+	@ranlib $@
+
+.PHONY: dynamic_lib
+dynamic_lib: $(DLIB)
+
+$(DLIB): $(LIB_OBJS)
+	@echo [Shared Library] $@
+	$(CXX) -shared -Wl,-soname,lib$(PROGRAM_NAME).so.$(LIB_VERSION) $(LIB_OBJS) -o $@
 
 # Test infrastructure
 
